@@ -547,6 +547,25 @@ def build_application(token: str) -> Application:
     return app
 
 
+def _ensure_event_loop() -> None:
+    """Guarantee a current event loop in the main thread before starting the bot.
+
+    Python 3.12+ deprecated auto-creating a loop via asyncio.get_event_loop(), and 3.14
+    makes it a hard RuntimeError ("There is no current event loop in thread 'MainThread'").
+    python-telegram-bot's run_polling() expects a loop to exist, so we create and set one
+    when there isn't a running loop yet. Harmless on older Pythons.
+    """
+    try:
+        asyncio.get_running_loop()
+        return  # already inside a running loop — nothing to do
+    except RuntimeError:
+        pass
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 def main() -> None:
     if not TG.get("enabled", True):
         raise SystemExit("Telegram bot disabled in config.yaml (telegram.enabled: false).")
@@ -558,6 +577,7 @@ def main() -> None:
         log.warning("No telegram.admin_ids set — bot runs in OPEN mode (anyone can control it).")
     log.info("Starting Telegram bot (provider=%s, memory=%s, admins=%s)",
              CFG.get("provider"), "on" if MEMORY else "off", ADMIN_IDS or "open")
+    _ensure_event_loop()
     app = build_application(token)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
