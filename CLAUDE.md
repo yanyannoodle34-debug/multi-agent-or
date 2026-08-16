@@ -12,8 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Engineering** — feasibility, architecture, build-vs-buy, effort/risk estimates
 
 Built in Python. No heavy framework — the coordinator control flow is plain Python. The LLM
-backend is pluggable: **NVIDIA NIM** (OpenAI-compatible, free API key — the default) or the
-**native Anthropic SDK**, selected by one line in `config.yaml`.
+backend is pluggable: **OpenRouter** (OpenAI-compatible gateway — the default), **NVIDIA NIM**
+(OpenAI-compatible, free API key), or the **native Anthropic SDK**, selected by one line in
+`config.yaml`.
 
 ## Commands
 
@@ -21,7 +22,8 @@ backend is pluggable: **NVIDIA NIM** (OpenAI-compatible, free API key — the de
 pip install -r requirements.txt          # pyyaml, openai, anthropic, flask
 
 # Provider auth (pick per config.yaml `provider:`):
-export NVIDIA_API_KEY=nvapi-...          # default provider; free key: https://build.nvidia.com
+export OPENROUTER_API_KEY=sk-or-...      # default provider; key: https://openrouter.ai/keys
+export NVIDIA_API_KEY=nvapi-...          # if provider: nvidia (free: https://build.nvidia.com)
 export ANTHROPIC_API_KEY=...             # if provider: anthropic
 
 python run.py "<task>"                    # run the coordinator over a task (CLI)
@@ -60,7 +62,9 @@ run.py / dashboard.py ──▶ orchestrator.activate(cfg)          # pick provi
 - **`providers.py`** owns the LLM backends and retry-with-backoff. `configure(name, cfg)`
   selects the active provider; the SDK client is built **lazily on the first call**, so
   `activate()` / model resolution work offline without a key. `"anthropic"` → native SDK;
-  any other name → OpenAI-compatible backend (NVIDIA NIM etc., via `base_url` + `api_key_env`).
+  any other name → OpenAI-compatible backend (OpenRouter, NVIDIA NIM, etc., via `base_url` +
+  `api_key_env`, with optional per-provider `headers` — e.g. OpenRouter's `HTTP-Referer`/`X-Title`).
+  Adding an OpenAI-compatible provider is config-only; no code change needed.
 - **`llm_utils.py`** holds provider-agnostic primitives: `call_llm` / `call_llm_async`
   (thin delegators to `providers`), `parallel_map` (bounded concurrency, returns exceptions
   in-place rather than crashing the batch), and `extract_tag` / `extract_all_tags` (XML parse).
@@ -77,7 +81,8 @@ run.py / dashboard.py ──▶ orchestrator.activate(cfg)          # pick provi
 
 Conventions worth preserving:
 - **Model IDs live in `config.yaml`, never hardcoded in logic** — under each provider block.
-  NVIDIA catalog: <https://build.nvidia.com/models>; Anthropic: <https://docs.claude.com/en/docs/about-claude/models>.
+  OpenRouter catalog: <https://openrouter.ai/models> (namespaced `vendor/model`, `:free` variants);
+  NVIDIA: <https://build.nvidia.com/models>; Anthropic: <https://docs.claude.com/en/docs/about-claude/models>.
 - **Graceful degradation**: an unknown specialist key is skipped; an empty route falls back
   to the whole roster; partial specialist failures still synthesize (only an all-fail errors).
 - **Provider clients build lazily** — never construct an SDK client at import time; keep

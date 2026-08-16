@@ -9,9 +9,9 @@ synthesizes their outputs into a single deliverable. This is a routing + orchest
 hybrid: the roster is fixed and known, but *which* specialists run — and what each is told —
 is decided per task.
 
-Runs on **NVIDIA NIM's free API** (default) or the **Anthropic API** — a one-line switch in
-`config.yaml`. Each agent keeps **persistent memory** in CSV (Excel-compatible), and there's
-a **local web dashboard** to drive the whole thing.
+Runs on **OpenRouter** (default), **NVIDIA NIM's free API**, or the **Anthropic API** — a
+one-line switch in `config.yaml`. Each agent keeps **persistent memory** in CSV
+(Excel-compatible), and there's a **local web dashboard** to drive the whole thing.
 
 ```
                     ┌─────────────────────────┐
@@ -34,10 +34,11 @@ a **local web dashboard** to drive the whole thing.
 ```bash
 pip install -r requirements.txt
 
-# Default provider is NVIDIA NIM — grab a FREE key at https://build.nvidia.com
-export NVIDIA_API_KEY=nvapi-...
-# ...or switch config.yaml to the anthropic provider and set:
-# export ANTHROPIC_API_KEY=...
+# Default provider is OpenRouter — get a key at https://openrouter.ai/keys
+export OPENROUTER_API_KEY=sk-or-...
+# ...or switch config.yaml's `provider:` and set the matching key:
+# export NVIDIA_API_KEY=nvapi-...      # provider: nvidia  (free: https://build.nvidia.com)
+# export ANTHROPIC_API_KEY=...         # provider: anthropic
 ```
 
 ## Run
@@ -58,22 +59,27 @@ python dashboard.py          # serves http://127.0.0.1:5000
 Submit a task, watch which specialists the coordinator engages, read each bot's output and
 the final deliverable, and browse each agent's memory — all locally.
 
-## Providers (free NVIDIA key or Anthropic)
+## Providers (OpenRouter, free NVIDIA key, or Anthropic)
 
 `config.yaml` picks the backend with one line:
 
 ```yaml
-provider: nvidia   # or: anthropic
+provider: openrouter   # or: nvidia, anthropic
 ```
 
-- **nvidia** — NVIDIA NIM, which is **OpenAI-compatible**. Free API key from
-  <https://build.nvidia.com>; browse model IDs at <https://build.nvidia.com/models>.
+- **openrouter** — the [OpenRouter](https://openrouter.ai) gateway: one key, many models
+  behind an **OpenAI-compatible** API. Key at <https://openrouter.ai/keys>; namespaced model
+  IDs (`vendor/model`) at <https://openrouter.ai/models> — many have a free `:free` variant.
+  The provider block can set optional `headers` (`HTTP-Referer` / `X-Title`) for OpenRouter's
+  app attribution and rankings.
+- **nvidia** — NVIDIA NIM, also **OpenAI-compatible**. Free API key from
+  <https://build.nvidia.com>; model IDs at <https://build.nvidia.com/models>.
 - **anthropic** — the native Anthropic SDK; model IDs at
   <https://docs.claude.com/en/docs/about-claude/models>.
 
 Each provider block carries its own model IDs, so switching is just changing `provider:`.
-Any other OpenAI-compatible endpoint works too — add a block with a `base_url` and an
-`api_key_env`, and the OpenAI-compatible backend handles it.
+Any other OpenAI-compatible endpoint works too — add a block with a `base_url`, an
+`api_key_env`, and optional `headers`, and the OpenAI-compatible backend handles it.
 
 ## Agent memory (CSV / Excel data store)
 
