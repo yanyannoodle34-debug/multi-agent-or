@@ -7,6 +7,10 @@
 Submit a task, watch which specialists the coordinator engages, read each bot's output
 and the final deliverable, and browse each agent's CSV memory — all locally.
 
+The dashboard also manages the Telegram control bot: set its token and admin IDs, start
+and stop it, and see live status. The bot runs as a managed subprocess; its token and
+admin IDs are passed via the child's environment (never written to disk).
+
 Async note: all orchestration runs on a single long-lived event loop in a background
 thread (so the async SDK clients stay bound to one loop across requests); Flask request
 handlers submit coroutines to it and block for the result.
@@ -15,8 +19,11 @@ handlers submit coroutines to it and block for the result.
 from __future__ import annotations
 
 import asyncio
-import json
+import atexit
 import logging
+import os
+import subprocess
+import sys
 import threading
 
 from flask import Flask, jsonify, render_template_string, request
@@ -36,6 +43,94 @@ threading.Thread(target=lambda: (_loop.run_forever()), daemon=True).start()
 
 def _submit(coro):
     return asyncio.run_coroutine_threadsafe(coro, _loop).result()
+
+
+# --- Telegram bot management -------------------------------------------------------------
+# The bot runs as a managed subprocess (isolated event loop, clean start/stop). Its token
+# and admin IDs are set here and passed via the child's environment — never written to disk.
+
+_TG = CFG.get("telegram") or {}
+TOKEN_ENV = _TG.get("token_env", "TELEGRAM_BOT_TOKEN")
+BOT_LOG = "telegram_bot.log"
+
+_bot_lock = threading.Lock()
+_bot_proc: subprocess.Popen | None = None
+_bot_settings = {
+    "token": os.environ.get(TOKEN_ENV, ""),
+    "admin_ids": [int(x) for x in (_TG.get("admin_ids") or [])],
+}
+
+
+def _mask(value: str) -> str:
+    if not value:
+        return ""
+    return f"{value[:4]}…{value[-4:]}" if len(value) > 12 else "•" * len(value)
+
+
+def _bot_running() -> bool:
+    return _bot_proc is not None and _bot_proc.poll() is None
+
+
+def _bot_status() -> dict:
+    proc = _bot_proc
+    exit_code = None if (proc is None or proc.poll() is None) else proc.poll()
+    tail = ""
+    if not _bot_running() and os.path.exists(BOT_LOG):
+        try:
+            with open(BOT_LOG, encoding="utf-8", errors="replace") as f:
+                tail = "".join(f.readlines()[-6:]).strip()
+        except OSError:
+            tail = ""
+    return {
+        "running": _bot_running(),
+        "pid": proc.pid if _bot_running() else None,
+        "exit_code": exit_code,
+        "token_set": bool(_bot_settings["token"]),
+        "token_masked": _mask(_bot_settings["token"]),
+        "token_env": TOKEN_ENV,
+        "admin_ids": _bot_settings["admin_ids"],
+        "recent_log": tail,
+    }
+
+
+def _start_bot() -> None:
+    with _bot_lock:
+        if _bot_running():
+            raise RuntimeError("Bot is already running.")
+        if not _bot_settings["token"]:
+            raise RuntimeError("Set the Telegram bot token first.")
+        env = dict(os.environ)
+        env[TOKEN_ENV] = _bot_settings["token"]
+        env["TELEGRAM_ADMIN_IDS"] = ",".join(str(i) for i in _bot_settings["admin_ids"])
+        logfile = open(BOT_LOG, "w", encoding="utf-8")  # noqa: SIM115 - handle owned by child
+        global _bot_proc
+        _bot_proc = subprocess.Popen(
+            [sys.executable, "telegram_bot.py"],
+            env=env, stdout=logfile, stderr=subprocess.STDOUT,
+            cwd=os.path.dirname(os.path.abspath(__file__)) or None,
+        )
+        log.info("Started Telegram bot subprocess (pid=%s).", _bot_proc.pid)
+
+
+def _stop_bot() -> None:
+    with _bot_lock:
+        global _bot_proc
+        if _bot_proc is None or _bot_proc.poll() is not None:
+            _bot_proc = None
+            return
+        _bot_proc.terminate()
+        try:
+            _bot_proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            _bot_proc.kill()
+        log.info("Stopped Telegram bot subprocess.")
+        _bot_proc = None
+
+
+@atexit.register
+def _cleanup_bot() -> None:
+    if _bot_running():
+        _stop_bot()
 
 
 app = Flask(__name__)
@@ -81,6 +176,16 @@ PAGE = """<!doctype html>
   .memtable th, .memtable td { text-align: left; border-bottom: 1px solid #262b40;
                                padding: .35rem .5rem; vertical-align: top; }
   a { color: #8fa6ef; }
+  .fld { display: block; margin-top: .6rem; font-size: .85rem; color: #cdd5f0; }
+  .fld input { display: block; width: 100%; margin-top: .25rem; padding: .5rem .6rem;
+               border-radius: 8px; border: 1px solid #333a57; background: #10152a;
+               color: inherit; font: inherit; }
+  .dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%;
+         vertical-align: middle; margin: 0 .1rem; }
+  .dot-on { background: #46d67a; box-shadow: 0 0 6px #46d67a; }
+  .dot-off { background: #6b7280; }
+  .tglog { color: #9aa3bd; font-size: .78rem; margin-top: .5rem; max-height: 8rem;
+           overflow: auto; }
 </style>
 </head>
 <body>
@@ -104,6 +209,27 @@ PAGE = """<!doctype html>
     <div class="muted">Each agent stores its runs in <code>data/&lt;agent&gt;.csv</code> (opens in Excel).</div>
     <div class="row" id="memBtns"></div>
     <div id="memView"></div>
+  </div>
+
+  <div class="card">
+    <h3>Telegram bot <span id="tgDot" class="dot dot-off" title="stopped"></span>
+        <span class="muted" id="tgState">checking…</span></h3>
+    <div class="muted" id="tgInfo"></div>
+
+    <label class="fld">Bot token <span class="muted">(from @BotFather)</span>
+      <input id="tgToken" type="password" placeholder="123456:ABC-DEF…" autocomplete="off">
+    </label>
+    <label class="fld">Admin IDs <span class="muted">(comma-separated Telegram user IDs; empty = open mode)</span>
+      <input id="tgAdmins" type="text" placeholder="123456789, 987654321" autocomplete="off">
+    </label>
+
+    <div class="row">
+      <button class="secondary" onclick="tgSave()">Save settings</button>
+      <button id="tgStart" onclick="tgStart()">▶️ Start</button>
+      <button id="tgStop" class="secondary" onclick="tgStop()">⏹ Stop</button>
+    </div>
+    <div class="muted" id="tgMsg"></div>
+    <pre id="tgLog" class="tglog"></pre>
   </div>
 </main>
 
@@ -175,6 +301,77 @@ async function loadMemory(agent){
   html += `</table>`;
   view.innerHTML = html;
 }
+
+// ---- Telegram bot control ----
+let tgAdminsTouched = false, tgTokenTouched = false;
+document.getElementById("tgAdmins").addEventListener("input", () => tgAdminsTouched = true);
+document.getElementById("tgToken").addEventListener("input", () => tgTokenTouched = true);
+
+function tgMsg(text, fail){
+  const el = document.getElementById("tgMsg");
+  el.textContent = text || "";
+  el.className = "muted" + (fail ? " fail" : "");
+}
+
+function renderTgStatus(s){
+  const dot = document.getElementById("tgDot");
+  dot.className = "dot " + (s.running ? "dot-on" : "dot-off");
+  dot.title = s.running ? "running" : "stopped";
+  document.getElementById("tgState").textContent =
+    s.running ? `running (pid ${s.pid})` : (s.exit_code != null ? `stopped (exit ${s.exit_code})` : "stopped");
+  const admins = (s.admin_ids && s.admin_ids.length) ? s.admin_ids.join(", ") : "— none (OPEN mode) —";
+  document.getElementById("tgInfo").innerHTML =
+    `token (${esc(s.token_env)}): <code>${s.token_set ? esc(s.token_masked) : "not set"}</code>` +
+    ` &nbsp;•&nbsp; admins: <code>${esc(admins)}</code>`;
+  document.getElementById("tgStart").disabled = s.running || !s.token_set;
+  document.getElementById("tgStop").disabled = !s.running;
+  // Don't clobber fields the user is editing.
+  if(!tgAdminsTouched) document.getElementById("tgAdmins").value = (s.admin_ids||[]).join(", ");
+  const logEl = document.getElementById("tgLog");
+  logEl.textContent = (!s.running && s.recent_log) ? s.recent_log : "";
+}
+
+async function tgStatus(){
+  try {
+    const r = await fetch("/telegram/status");
+    renderTgStatus(await r.json());
+  } catch(e){ /* dashboard still loading */ }
+}
+
+async function tgSave(){
+  const body = {
+    admin_ids: document.getElementById("tgAdmins").value,
+  };
+  const tok = document.getElementById("tgToken").value.trim();
+  if(tgTokenTouched && tok) body.token = tok;
+  const r = await fetch("/telegram/settings", {
+    method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body)
+  });
+  const d = await r.json();
+  if(!r.ok){ tgMsg(d.error || "save failed", true); return; }
+  tgTokenTouched = false; document.getElementById("tgToken").value = "";
+  tgAdminsTouched = false;
+  tgMsg(d.note || "Saved.");
+  renderTgStatus(d);
+}
+
+async function tgStart(){
+  tgMsg("starting…");
+  const r = await fetch("/telegram/start", {method: "POST"});
+  const d = await r.json();
+  if(!r.ok){ tgMsg(d.error || "start failed", true); renderTgStatus(d); return; }
+  tgMsg("started."); renderTgStatus(d);
+}
+
+async function tgStop(){
+  tgMsg("stopping…");
+  const r = await fetch("/telegram/stop", {method: "POST"});
+  const d = await r.json();
+  tgMsg("stopped."); renderTgStatus(d);
+}
+
+tgStatus();
+setInterval(tgStatus, 3000);   // live status refresh
 </script>
 </body>
 </html>"""
@@ -210,6 +407,46 @@ def memory_endpoint(agent):
     if MEMORY is None:
         return jsonify({"agent": agent, "rows": []})
     return jsonify({"agent": agent, "rows": MEMORY.recall(agent, limit=20)})
+
+
+# --- Telegram bot control endpoints ------------------------------------------------------
+
+@app.route("/telegram/status")
+def telegram_status():
+    return jsonify(_bot_status())
+
+
+@app.route("/telegram/settings", methods=["POST"])
+def telegram_settings():
+    payload = request.get_json(silent=True) or {}
+    if "token" in payload:
+        _bot_settings["token"] = (payload.get("token") or "").strip()
+    if "admin_ids" in payload:
+        raw = payload.get("admin_ids") or ""
+        ids = []
+        for part in str(raw).replace(",", " ").split():
+            try:
+                ids.append(int(part))
+            except ValueError:
+                return jsonify({"error": f"invalid admin id: {part!r}"}), 400
+        _bot_settings["admin_ids"] = ids
+    note = "Saved. Restart the bot to apply." if _bot_running() else "Saved."
+    return jsonify({"ok": True, "note": note, **_bot_status()})
+
+
+@app.route("/telegram/start", methods=["POST"])
+def telegram_start():
+    try:
+        _start_bot()
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc), **_bot_status()}), 400
+    return jsonify({"ok": True, **_bot_status()})
+
+
+@app.route("/telegram/stop", methods=["POST"])
+def telegram_stop():
+    _stop_bot()
+    return jsonify({"ok": True, **_bot_status()})
 
 
 if __name__ == "__main__":

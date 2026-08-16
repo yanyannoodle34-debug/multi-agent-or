@@ -56,8 +56,29 @@ log = logging.getLogger("orchestration.telegram")
 CFG = orchestrator.activate(orchestrator.load_config())
 MEMORY = orchestrator.build_memory(CFG)
 TG = CFG.get("telegram") or {}
-ADMIN_IDS = set(TG.get("admin_ids") or [])
 TELEGRAM_MAX = 4096
+
+
+def _load_admin_ids() -> set[int]:
+    """Admin IDs from the TELEGRAM_ADMIN_IDS env override (comma-separated) if present,
+    else from config.yaml's telegram.admin_ids. An explicit empty env value = OPEN mode.
+    The env path lets the web dashboard launch this bot with admins set, no config edit."""
+    raw = os.environ.get("TELEGRAM_ADMIN_IDS")
+    if raw is not None:
+        ids: set[int] = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids.add(int(part))
+            except ValueError:
+                log.warning("Ignoring invalid admin id %r", part)
+        return ids
+    return {int(x) for x in (TG.get("admin_ids") or [])}
+
+
+ADMIN_IDS = _load_admin_ids()
 
 
 # --------------------------------------------------------------------------- helpers

@@ -57,7 +57,10 @@ python dashboard.py          # serves http://127.0.0.1:5000
 ```
 
 Submit a task, watch which specialists the coordinator engages, read each bot's output and
-the final deliverable, and browse each agent's memory — all locally.
+the final deliverable, and browse each agent's memory — all locally. The dashboard also has
+a **Telegram bot panel**: set the bot token and admin IDs, **Start/Stop** the bot, and watch
+live status — so you can run the Telegram bot without touching the terminal (it runs as a
+managed subprocess; the token and admin IDs are passed via its environment, never saved to disk).
 
 **Telegram control bot:**
 
