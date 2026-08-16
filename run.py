@@ -1,13 +1,15 @@
-"""Entrypoint for the multi-agent orchestration system.
+"""CLI entrypoint for the multi-agent orchestration system.
 
 Usage:
-    export ANTHROPIC_API_KEY=...
-    python run.py "Plan the launch of our new analytics dashboard"
+    # pick your provider + key (see config.yaml). For NVIDIA's free NIM API:
+    export NVIDIA_API_KEY=nvapi-...        # get one at https://build.nvidia.com
+    # or, for Anthropic:  export ANTHROPIC_API_KEY=...
 
-    # or pipe the task in:
+    python run.py "Plan the launch of our new analytics dashboard"
     echo "Draft a Q3 pipeline recovery plan" | python run.py
 
-Reads config.yaml, runs the coordinator over the task, and prints the deliverable.
+Reads config.yaml, activates the configured provider, runs the coordinator over the task
+(with per-agent memory if enabled), and prints the deliverable.
 """
 
 from __future__ import annotations
@@ -15,17 +17,10 @@ from __future__ import annotations
 import logging
 import sys
 
-import yaml
-
 from llm_utils import run
-from orchestrator import orchestrate
+from orchestrator import activate, build_memory, load_config, run_task
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-
-def load_config(path: str = "config.yaml") -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def read_task() -> str:
@@ -42,10 +37,14 @@ def main() -> None:
         print('Usage: python run.py "<your task>"', file=sys.stderr)
         raise SystemExit(2)
 
-    cfg = load_config()
-    result = run(orchestrate(task, cfg))
+    cfg = activate(load_config())
+    memory = build_memory(cfg)
+    result = run(run_task(task, cfg, memory))
+
+    engaged = ", ".join(a.label for a in result.assignments)
+    print(f"\nProvider: {cfg.get('provider')}   Specialists engaged: {engaged}")
     print("\n" + "=" * 60 + "\nDELIVERABLE\n" + "=" * 60 + "\n")
-    print(result)
+    print(result.deliverable)
 
 
 if __name__ == "__main__":

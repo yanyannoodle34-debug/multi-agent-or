@@ -7,12 +7,10 @@ outputs into a single deliverable.
 
 This is a routing + orchestrator-workers hybrid: the workers are a known team (not
 invented at runtime), but which of them run — and what each is told — is decided per task.
+Each specialist can carry memory across runs (see `memory.py`), and the whole flow can be
+driven from the CLI (`run.py`) or the local web dashboard (`dashboard.py`).
 
-Run:
-    export ANTHROPIC_API_KEY=...
-    python run.py "Plan the launch of our new analytics dashboard"
-
-Config lives in config.yaml (models, per-specialist personas, limits).
+Config lives in config.yaml (provider + models, per-specialist personas, memory, limits).
 """
 
 from __future__ import annotations
@@ -20,6 +18,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import yaml
+
+import providers
 from llm_utils import (
     call_llm,
     call_llm_async,
@@ -27,6 +28,7 @@ from llm_utils import (
     extract_tag,
     parallel_map,
 )
+from memory import MemoryStore, new_run_id
 
 log = logging.getLogger("orchestration.coordinator")
 
@@ -39,6 +41,34 @@ class Assignment:
     label: str        # display name, e.g. "Sales"
     system: str       # the specialist's persona/system prompt (from config)
     instructions: str # what the coordinator is asking this specialist to do
+
+
+@dataclass
+class RunResult:
+    """The full result of one orchestration run — used by the CLI and the dashboard."""
+
+    task: str
+    analysis: str
+    assignments: list[Assignment]
+    outputs: list        # each entry is a str, or an Exception if that specialist failed
+    deliverable: str
+
+    def to_dict(self) -> dict:
+        return {
+            "task": self.task,
+            "analysis": self.analysis,
+            "specialists": [
+                {
+                    "key": a.key,
+                    "label": a.label,
+                    "instructions": a.instructions,
+                    "output": str(o) if isinstance(o, Exception) else o,
+                    "failed": isinstance(o, Exception),
+                }
+                for a, o in zip(self.assignments, self.outputs)
+            ],
+            "deliverable": self.deliverable,
+        }
 
 
 ROUTER_SYSTEM_TEMPLATE = """You are the coordinator (primary agent) of a specialist team.
@@ -68,7 +98,7 @@ task implies. Lead with the answer; keep it actionable. Output only the final de
 def _roster_block(specialists: dict) -> str:
     lines = []
     for key, spec in specialists.items():
-        # First sentence of the persona is enough for the router to choose.
+        # First ~200 chars of the persona is enough for the router to choose.
         summary = " ".join(spec["system"].split())
         summary = summary[:200] + ("…" if len(summary) > 200 else "")
         lines.append(f"- {key} ({spec.get('label', key)}): {summary}")
@@ -126,12 +156,13 @@ def route(task: str, cfg: dict) -> tuple[str, list[Assignment]]:
     return analysis, assignments
 
 
-async def _run_specialist(assignment: Assignment, task: str, cfg: dict) -> str:
+async def _run_specialist(assignment: Assignment, task: str, cfg: dict, history: str = "") -> str:
     prompt = (
         f"Overall task (for context only):\n{task}\n\n"
-        f"Your assignment as the {assignment.label} specialist:\n{assignment.instructions}\n\n"
-        "Complete only your part. Be concrete and self-contained, and flag any hand-offs "
-        "to other specialists at the end under a 'Hand-offs:' line."
+        + (f"{history}\n\n" if history else "")
+        + f"Your assignment as the {assignment.label} specialist:\n{assignment.instructions}\n\n"
+        + "Complete only your part. Be concrete and self-contained, and flag any hand-offs "
+        + "to other specialists at the end under a 'Hand-offs:' line."
     )
     return await call_llm_async(
         prompt,
@@ -142,7 +173,7 @@ async def _run_specialist(assignment: Assignment, task: str, cfg: dict) -> str:
     )
 
 
-def synthesize(task: str, assignments: list[Assignment], outputs: list[str], cfg: dict) -> str:
+def synthesize(task: str, assignments: list[Assignment], outputs: list, cfg: dict) -> str:
     """Coordinator step: merge specialist outputs into the final deliverable."""
     system = (cfg.get("prompts") or {}).get("synthesizer_system") or SYNTH_SYSTEM
     parts = []
@@ -159,20 +190,80 @@ def synthesize(task: str, assignments: list[Assignment], outputs: list[str], cfg
     )
 
 
-async def orchestrate(task: str, cfg: dict) -> str:
-    """Full coordinator run: route → dispatch specialists in parallel → synthesize."""
-    _, assignments = route(task, cfg)
+async def run_task(task: str, cfg: dict, memory: MemoryStore | None = None) -> RunResult:
+    """Full coordinator run: route → (recall memory) → dispatch specialists → synthesize.
+
+    When `memory` is provided, each specialist is primed with its recent history and its
+    result is recorded back to its per-agent CSV.
+    """
+    analysis, assignments = route(task, cfg)
+
+    histories: dict[str, str] = {}
+    if memory is not None:
+        for a in assignments:
+            histories[a.key] = memory.recall_context(a.key)
+
     outputs = await parallel_map(
-        lambda a: _run_specialist(a, task, cfg),
+        lambda a: _run_specialist(a, task, cfg, histories.get(a.key, "")),
         assignments,
         max_concurrency=cfg.get("max_concurrency", 4),
     )
+
+    if memory is not None:
+        run_id = new_run_id()
+        for a, o in zip(assignments, outputs):
+            memory.record(a.key, task, a.instructions, o, run_id=run_id)
+
     failed = sum(1 for o in outputs if isinstance(o, Exception))
+    if failed == len(outputs):
+        # Nothing to synthesize — surface the failure rather than an empty deliverable.
+        raise RuntimeError("All specialists failed: " + "; ".join(str(o) for o in outputs))
     if failed:
         log.warning("%d/%d specialists failed; synthesizing from partial results.",
                     failed, len(outputs))
-    if failed == len(outputs):
-        # Nothing to synthesize — surface the failure rather than an empty deliverable.
-        errs = "; ".join(str(o) for o in outputs)
-        raise RuntimeError(f"All specialists failed: {errs}")
-    return synthesize(task, assignments, outputs, cfg)
+
+    deliverable = synthesize(task, assignments, outputs, cfg)
+    return RunResult(task=task, analysis=analysis, assignments=assignments,
+                     outputs=outputs, deliverable=deliverable)
+
+
+async def orchestrate(task: str, cfg: dict) -> str:
+    """Back-compat thin wrapper: run the task and return just the final deliverable."""
+    return (await run_task(task, cfg)).deliverable
+
+
+# --- config + wiring helpers (shared by run.py and dashboard.py) -------------------------
+
+def load_config(path: str = "config.yaml") -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def activate(cfg: dict) -> dict:
+    """Select the configured provider and resolve its model IDs into cfg["models"].
+
+    Safe to call offline: the provider client is only built on the first real LLM call,
+    so this resolves models without needing an API key or network.
+    """
+    name = cfg.get("provider", "anthropic")
+    pcfg = (cfg.get("providers") or {}).get(name)
+    if not pcfg:
+        raise SystemExit(f"Provider {name!r} is not defined under `providers:` in config.yaml")
+    models = pcfg.get("models")
+    if not models:
+        raise SystemExit(f"Provider {name!r} has no `models:` block in config.yaml")
+    providers.configure(name, pcfg)
+    cfg["models"] = models
+    return cfg
+
+
+def build_memory(cfg: dict) -> MemoryStore | None:
+    """Construct the per-agent memory store if enabled in config, else None."""
+    mc = cfg.get("memory") or {}
+    if not mc.get("enabled"):
+        return None
+    return MemoryStore(
+        base_dir=mc.get("dir", "data"),
+        recall=mc.get("recall", 3),
+        export_xlsx=mc.get("export_xlsx", False),
+    )

@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Runtime agent memory (CSV/xlsx data store)
+data/
+*.xlsx

@@ -1,2 +1,12 @@
-anthropic>=0.40.0
+# Core
 pyyaml>=6.0
+
+# LLM providers — install the one(s) your config.yaml `provider:` uses.
+openai>=1.40.0        # NVIDIA NIM / any OpenAI-compatible endpoint (default provider)
+anthropic>=0.40.0     # native Anthropic provider
+
+# Local web dashboard (dashboard.py)
+flask>=3.0
+
+# Optional: xlsx export of agent memory (set memory.export_xlsx: true in config.yaml)
+# openpyxl>=3.1

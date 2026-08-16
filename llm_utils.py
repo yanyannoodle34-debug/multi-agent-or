@@ -1,109 +1,35 @@
-"""Shared foundation for orchestration workflows.
+"""Shared foundation for the orchestration workflow.
 
-Copy this file into any generated orchestration project. It provides the four
-primitives every pattern needs:
+Provides the primitives every step needs, independent of which LLM provider is active:
 
     call_llm        - a single, retried, synchronous LLM call
     call_llm_async  - the async version, for fan-out
     parallel_map    - run an async coroutine over many inputs with bounded concurrency
     extract_tag     - pull structured fields out of an XML-tagged response
-    with_retry      - decorator: exponential backoff on transient API errors
+    extract_all_tags- pull every occurrence of a tag (lists of assignments/subtasks)
+    run             - asyncio.run wrapper for entrypoints
 
-Design goals: no framework lock-in, model IDs supplied by the caller (from config),
-every network call retried, and structured hand-offs via XML tags.
-
-Requires: `pip install anthropic`
-Auth:     set the ANTHROPIC_API_KEY environment variable.
+`call_llm` / `call_llm_async` delegate to `providers`, which owns the actual SDK client
+and retry-with-backoff and can target either the native Anthropic SDK or an
+OpenAI-compatible endpoint (NVIDIA NIM, etc.). Select the backend once at startup with
+`providers.configure(...)` (see `orchestrator.activate`).
 """
 
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
-import random
 import re
-import time
-from typing import Awaitable, Callable, Iterable, Sequence, TypeVar
+from typing import Awaitable, Callable, Sequence, TypeVar
 
-from anthropic import Anthropic, AsyncAnthropic
-from anthropic import APIStatusError, APIConnectionError, RateLimitError
+import providers
 
 log = logging.getLogger("orchestration")
 
 T = TypeVar("T")
 R = TypeVar("R")
 
-# Reuse clients across calls (connection pooling). Auth comes from ANTHROPIC_API_KEY.
-_sync_client = Anthropic()
-_async_client = AsyncAnthropic()
 
-# Errors worth retrying: rate limits, connection blips, and 5xx from the API.
-_RETRYABLE = (RateLimitError, APIConnectionError)
-
-
-def with_retry(
-    max_attempts: int = 4,
-    base_delay: float = 1.0,
-    max_delay: float = 30.0,
-) -> Callable:
-    """Decorator: retry a function on transient API errors with exponential backoff + jitter."""
-
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            attempt = 0
-            while True:
-                try:
-                    return func(*args, **kwargs)
-                except _RETRYABLE as exc:
-                    attempt = _handle_retry(exc, attempt, max_attempts, base_delay, max_delay)
-                except APIStatusError as exc:
-                    # Retry 5xx only; re-raise 4xx (bad request, auth, etc.).
-                    if exc.status_code >= 500:
-                        attempt = _handle_retry(exc, attempt, max_attempts, base_delay, max_delay)
-                    else:
-                        raise
-
-        @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
-            attempt = 0
-            while True:
-                try:
-                    return await func(*args, **kwargs)
-                except _RETRYABLE as exc:
-                    attempt = _handle_retry(exc, attempt, max_attempts, base_delay, max_delay, sleep=False)
-                    await asyncio.sleep(_backoff(attempt, base_delay, max_delay))
-                except APIStatusError as exc:
-                    if exc.status_code >= 500:
-                        attempt = _handle_retry(exc, attempt, max_attempts, base_delay, max_delay, sleep=False)
-                        await asyncio.sleep(_backoff(attempt, base_delay, max_delay))
-                    else:
-                        raise
-
-        return async_wrapper if asyncio.iscoroutinefunction(func) else wrapper
-
-    return decorator
-
-
-def _backoff(attempt: int, base_delay: float, max_delay: float) -> float:
-    return min(max_delay, base_delay * (2 ** (attempt - 1))) * (0.5 + random.random())
-
-
-def _handle_retry(exc, attempt, max_attempts, base_delay, max_delay, sleep=True):
-    attempt += 1
-    if attempt >= max_attempts:
-        log.error("Giving up after %d attempts: %s", attempt, exc)
-        raise
-    delay = _backoff(attempt, base_delay, max_delay)
-    log.warning("Transient error (attempt %d/%d): %s — retrying in %.1fs",
-                attempt, max_attempts, exc, delay)
-    if sleep:
-        time.sleep(delay)
-    return attempt
-
-
-@with_retry()
 def call_llm(
     prompt: str,
     *,
@@ -112,22 +38,14 @@ def call_llm(
     max_tokens: int = 2048,
     temperature: float = 1.0,
 ) -> str:
-    """One synchronous LLM call. Returns the concatenated text of the response."""
-    kwargs = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if system:
-        kwargs["system"] = system
-    resp = _sync_client.messages.create(**kwargs)
-    text = "".join(block.text for block in resp.content if block.type == "text")
+    """One synchronous LLM call via the active provider. Returns the response text."""
+    text = providers.complete(
+        prompt, model=model, system=system, max_tokens=max_tokens, temperature=temperature
+    )
     log.debug("call_llm model=%s in=%dch out=%dch", model, len(prompt), len(text))
     return text
 
 
-@with_retry()
 async def call_llm_async(
     prompt: str,
     *,
@@ -136,17 +54,10 @@ async def call_llm_async(
     max_tokens: int = 2048,
     temperature: float = 1.0,
 ) -> str:
-    """Async LLM call — use inside parallel_map for fan-out."""
-    kwargs = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if system:
-        kwargs["system"] = system
-    resp = await _async_client.messages.create(**kwargs)
-    return "".join(block.text for block in resp.content if block.type == "text")
+    """Async LLM call via the active provider — use inside parallel_map for fan-out."""
+    return await providers.acomplete(
+        prompt, model=model, system=system, max_tokens=max_tokens, temperature=temperature
+    )
 
 
 async def parallel_map(
@@ -189,7 +100,7 @@ def extract_tag(text: str, tag: str, *, default: str | None = None) -> str | Non
 
 
 def extract_all_tags(text: str, tag: str) -> list[str]:
-    """Extract every <tag>...</tag> occurrence — handy for lists of subtasks."""
+    """Extract every <tag>...</tag> occurrence — handy for lists of assignments/subtasks."""
     return [m.strip() for m in re.findall(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL | re.IGNORECASE)]
 
 
