@@ -119,10 +119,14 @@ class _OpenAICompatBackend(_Backend):
             raise RuntimeError(
                 f"Set the {key_env} environment variable for the "
                 f"'{cfg.get('_name', 'openai')}' provider "
-                f"(free NVIDIA key: https://build.nvidia.com)."
+                f"(free keys: NVIDIA https://build.nvidia.com , "
+                f"OpenRouter https://openrouter.ai/keys)."
             )
-        self._sync = OpenAI(base_url=base_url, api_key=api_key)
-        self._async = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        # Optional per-provider headers — e.g. OpenRouter's HTTP-Referer / X-Title
+        # used for app attribution and its model-usage rankings.
+        headers = cfg.get("headers") or None
+        self._sync = OpenAI(base_url=base_url, api_key=api_key, default_headers=headers)
+        self._async = AsyncOpenAI(base_url=base_url, api_key=api_key, default_headers=headers)
         self._always = (RateLimitError, APIConnectionError)
         self._status = APIStatusError
 

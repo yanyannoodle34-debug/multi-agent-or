@@ -3,11 +3,28 @@
 
 # Which LLM backend to use. Each provider block below carries its own model IDs, so
 # switching provider is a one-line change here.
-#   nvidia    -> NVIDIA NIM (OpenAI-compatible, FREE API key)  [default]
-#   anthropic -> native Anthropic SDK
-provider: nvidia
+#   openrouter -> OpenRouter gateway (OpenAI-compatible, one key for many models)  [default]
+#   nvidia     -> NVIDIA NIM (OpenAI-compatible, FREE API key)
+#   anthropic  -> native Anthropic SDK
+provider: openrouter
 
 providers:
+  openrouter:
+    # OpenRouter is an OpenAI-compatible gateway to many providers/models behind one key.
+    # Get a key at https://openrouter.ai/keys  then:  export OPENROUTER_API_KEY=sk-or-...
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    # Optional: OpenRouter uses these for app attribution + its usage rankings. Safe to omit.
+    headers:
+      HTTP-Referer: "https://github.com/yanyannoodle34-debug/multi-agent-or"
+      X-Title: "multi-agent-or"
+    # Model IDs are namespaced "vendor/model". Browse: https://openrouter.ai/models
+    # Many models have a FREE variant — append ":free" (e.g. "meta-llama/llama-3.3-70b-instruct:free").
+    models:
+      coordinator: "meta-llama/llama-3.3-70b-instruct"   # routing + synthesis (stronger model)
+      specialist:  "meta-llama/llama-3.1-8b-instruct"     # the domain bots (favor speed/cost)
+      synthesizer: "meta-llama/llama-3.3-70b-instruct"
+
   nvidia:
     # NVIDIA NIM is OpenAI-compatible. Get a FREE key at https://build.nvidia.com
     # then:  export NVIDIA_API_KEY=nvapi-...
@@ -34,6 +51,16 @@ memory:
   dir: "data"          # CSVs written here: data/sales.csv, data/marketing.csv, ...
   recall: 3            # how many past entries to feed back into each agent's next prompt
   export_xlsx: false   # also mirror each agent's history to data/<agent>.xlsx (needs openpyxl)
+
+# Telegram control bot (telegram_bot.py). Drive the orchestrator from Telegram with
+# inline buttons: run/stop tasks, live status, per-agent CSV download/upload, and API-key
+# / provider management — all gated to admins.
+telegram:
+  enabled: true
+  token_env: "TELEGRAM_BOT_TOKEN"   # bot token from @BotFather; never hardcode it
+  # Telegram numeric user IDs allowed to control the bot. Find yours via @userinfobot.
+  # Leave empty to run in OPEN mode (anyone can control it) — not recommended.
+  admin_ids: []
 
 # Concurrency for the parallel specialist fan-out. Raise for speed, lower for rate limits.
 max_concurrency: 4

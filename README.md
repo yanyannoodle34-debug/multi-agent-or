@@ -9,9 +9,9 @@ synthesizes their outputs into a single deliverable. This is a routing + orchest
 hybrid: the roster is fixed and known, but *which* specialists run — and what each is told —
 is decided per task.
 
-Runs on **NVIDIA NIM's free API** (default) or the **Anthropic API** — a one-line switch in
-`config.yaml`. Each agent keeps **persistent memory** in CSV (Excel-compatible), and there's
-a **local web dashboard** to drive the whole thing.
+Runs on **OpenRouter** (default), **NVIDIA NIM's free API**, or the **Anthropic API** — a
+one-line switch in `config.yaml`. Each agent keeps **persistent memory** in CSV
+(Excel-compatible), and there's a **local web dashboard** to drive the whole thing.
 
 ```
                     ┌─────────────────────────┐
@@ -34,10 +34,11 @@ a **local web dashboard** to drive the whole thing.
 ```bash
 pip install -r requirements.txt
 
-# Default provider is NVIDIA NIM — grab a FREE key at https://build.nvidia.com
-export NVIDIA_API_KEY=nvapi-...
-# ...or switch config.yaml to the anthropic provider and set:
-# export ANTHROPIC_API_KEY=...
+# Default provider is OpenRouter — get a key at https://openrouter.ai/keys
+export OPENROUTER_API_KEY=sk-or-...
+# ...or switch config.yaml's `provider:` and set the matching key:
+# export NVIDIA_API_KEY=nvapi-...      # provider: nvidia  (free: https://build.nvidia.com)
+# export ANTHROPIC_API_KEY=...         # provider: anthropic
 ```
 
 ## Run
@@ -58,22 +59,36 @@ python dashboard.py          # serves http://127.0.0.1:5000
 Submit a task, watch which specialists the coordinator engages, read each bot's output and
 the final deliverable, and browse each agent's memory — all locally.
 
-## Providers (free NVIDIA key or Anthropic)
+**Telegram control bot:**
+
+```bash
+export TELEGRAM_BOT_TOKEN=...             # from @BotFather
+python telegram_bot.py
+```
+
+Control everything from Telegram with inline buttons (see below).
+
+## Providers (OpenRouter, free NVIDIA key, or Anthropic)
 
 `config.yaml` picks the backend with one line:
 
 ```yaml
-provider: nvidia   # or: anthropic
+provider: openrouter   # or: nvidia, anthropic
 ```
 
-- **nvidia** — NVIDIA NIM, which is **OpenAI-compatible**. Free API key from
-  <https://build.nvidia.com>; browse model IDs at <https://build.nvidia.com/models>.
+- **openrouter** — the [OpenRouter](https://openrouter.ai) gateway: one key, many models
+  behind an **OpenAI-compatible** API. Key at <https://openrouter.ai/keys>; namespaced model
+  IDs (`vendor/model`) at <https://openrouter.ai/models> — many have a free `:free` variant.
+  The provider block can set optional `headers` (`HTTP-Referer` / `X-Title`) for OpenRouter's
+  app attribution and rankings.
+- **nvidia** — NVIDIA NIM, also **OpenAI-compatible**. Free API key from
+  <https://build.nvidia.com>; model IDs at <https://build.nvidia.com/models>.
 - **anthropic** — the native Anthropic SDK; model IDs at
   <https://docs.claude.com/en/docs/about-claude/models>.
 
 Each provider block carries its own model IDs, so switching is just changing `provider:`.
-Any other OpenAI-compatible endpoint works too — add a block with a `base_url` and an
-`api_key_env`, and the OpenAI-compatible backend handles it.
+Any other OpenAI-compatible endpoint works too — add a block with a `base_url`, an
+`api_key_env`, and optional `headers`, and the OpenAI-compatible backend handles it.
 
 ## Agent memory (CSV / Excel data store)
 
@@ -91,17 +106,53 @@ memory:
   export_xlsx: false
 ```
 
+## Telegram control bot
+
+Drive the whole system from Telegram with friendly inline buttons — no terminal needed.
+
+```bash
+pip install python-telegram-bot>=21
+export TELEGRAM_BOT_TOKEN=...             # from @BotFather
+# set your Telegram user id(s) under telegram.admin_ids in config.yaml (find yours via @userinfobot)
+python telegram_bot.py
+```
+
+Send `/start`, then use the menu:
+
+- **▶️ Run task / ⏹ Stop** — run an orchestration; live progress updates as it routes,
+  runs specialists, and synthesizes. Stop cancels a run mid-flight.
+- **📊 Status** — a live dashboard: active provider, model IDs, masked API key, memory
+  state, whether a task is running, and the last run summary.
+- **🧠 Agents** — per agent: **📥 download** its memory CSV, **⬆️ upload** a replacement
+  CSV (header-validated), or **🗑 clear** it.
+- **🔑 API keys** — set any provider's key (session-scoped; your message with the secret is
+  deleted best-effort) and switch the active provider.
+- **⚙️ Admin** — toggle memory; see admin IDs.
+
+Every screen has a **⬅️ Back** button. Access is gated to `telegram.admin_ids`; a global
+error handler keeps the bot alive and replies with a friendly message on any failure. The
+bot stays responsive during a run (the synchronous coordinator calls are offloaded to a
+worker thread), so **Stop** and the menu always work.
+
+```yaml
+telegram:
+  enabled: true
+  token_env: "TELEGRAM_BOT_TOKEN"
+  admin_ids: [123456789]     # empty = OPEN mode (anyone can control it) — not recommended
+```
+
 ## Layout
 
 | File             | Role                                                                       |
 |------------------|----------------------------------------------------------------------------|
-| `config.yaml`    | Tunable surface: provider + models, specialist personas, memory, limits    |
-| `providers.py`   | LLM backends: native Anthropic and OpenAI-compatible (NVIDIA NIM); retry    |
+| `config.yaml`    | Tunable surface: provider + models, specialist personas, memory, telegram  |
+| `providers.py`   | LLM backends: native Anthropic and OpenAI-compatible (OpenRouter/NVIDIA)    |
 | `llm_utils.py`   | Provider-agnostic primitives: `call_llm(_async)`, `parallel_map`, XML parse |
-| `memory.py`      | Per-agent CSV/Excel memory store: `record`, `recall`, `recall_context`     |
+| `memory.py`      | Per-agent CSV/Excel memory store: `record`, `recall`, download/upload/clear |
 | `orchestrator.py`| Coordinator flow: `route` → parallel specialists (+memory) → `synthesize`   |
 | `run.py`         | CLI entrypoint                                                              |
 | `dashboard.py`   | Local Flask web dashboard                                                   |
+| `telegram_bot.py`| Telegram control bot (inline buttons, admin-gated)                          |
 
 ## Notes
 
