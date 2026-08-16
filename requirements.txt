@@ -8,5 +8,8 @@ anthropic>=0.40.0     # native Anthropic provider
 # Local web dashboard (dashboard.py)
 flask>=3.0
 
+# Telegram control bot (telegram_bot.py)
+python-telegram-bot>=21.0
+
 # Optional: xlsx export of agent memory (set memory.export_xlsx: true in config.yaml)
 # openpyxl>=3.1

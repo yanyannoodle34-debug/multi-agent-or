@@ -59,6 +59,15 @@ python dashboard.py          # serves http://127.0.0.1:5000
 Submit a task, watch which specialists the coordinator engages, read each bot's output and
 the final deliverable, and browse each agent's memory — all locally.
 
+**Telegram control bot:**
+
+```bash
+export TELEGRAM_BOT_TOKEN=...             # from @BotFather
+python telegram_bot.py
+```
+
+Control everything from Telegram with inline buttons (see below).
+
 ## Providers (OpenRouter, free NVIDIA key, or Anthropic)
 
 `config.yaml` picks the backend with one line:
@@ -97,17 +106,53 @@ memory:
   export_xlsx: false
 ```
 
+## Telegram control bot
+
+Drive the whole system from Telegram with friendly inline buttons — no terminal needed.
+
+```bash
+pip install python-telegram-bot>=21
+export TELEGRAM_BOT_TOKEN=...             # from @BotFather
+# set your Telegram user id(s) under telegram.admin_ids in config.yaml (find yours via @userinfobot)
+python telegram_bot.py
+```
+
+Send `/start`, then use the menu:
+
+- **▶️ Run task / ⏹ Stop** — run an orchestration; live progress updates as it routes,
+  runs specialists, and synthesizes. Stop cancels a run mid-flight.
+- **📊 Status** — a live dashboard: active provider, model IDs, masked API key, memory
+  state, whether a task is running, and the last run summary.
+- **🧠 Agents** — per agent: **📥 download** its memory CSV, **⬆️ upload** a replacement
+  CSV (header-validated), or **🗑 clear** it.
+- **🔑 API keys** — set any provider's key (session-scoped; your message with the secret is
+  deleted best-effort) and switch the active provider.
+- **⚙️ Admin** — toggle memory; see admin IDs.
+
+Every screen has a **⬅️ Back** button. Access is gated to `telegram.admin_ids`; a global
+error handler keeps the bot alive and replies with a friendly message on any failure. The
+bot stays responsive during a run (the synchronous coordinator calls are offloaded to a
+worker thread), so **Stop** and the menu always work.
+
+```yaml
+telegram:
+  enabled: true
+  token_env: "TELEGRAM_BOT_TOKEN"
+  admin_ids: [123456789]     # empty = OPEN mode (anyone can control it) — not recommended
+```
+
 ## Layout
 
 | File             | Role                                                                       |
 |------------------|----------------------------------------------------------------------------|
-| `config.yaml`    | Tunable surface: provider + models, specialist personas, memory, limits    |
-| `providers.py`   | LLM backends: native Anthropic and OpenAI-compatible (NVIDIA NIM); retry    |
+| `config.yaml`    | Tunable surface: provider + models, specialist personas, memory, telegram  |
+| `providers.py`   | LLM backends: native Anthropic and OpenAI-compatible (OpenRouter/NVIDIA)    |
 | `llm_utils.py`   | Provider-agnostic primitives: `call_llm(_async)`, `parallel_map`, XML parse |
-| `memory.py`      | Per-agent CSV/Excel memory store: `record`, `recall`, `recall_context`     |
+| `memory.py`      | Per-agent CSV/Excel memory store: `record`, `recall`, download/upload/clear |
 | `orchestrator.py`| Coordinator flow: `route` → parallel specialists (+memory) → `synthesize`   |
 | `run.py`         | CLI entrypoint                                                              |
 | `dashboard.py`   | Local Flask web dashboard                                                   |
+| `telegram_bot.py`| Telegram control bot (inline buttons, admin-gated)                          |
 
 ## Notes
 

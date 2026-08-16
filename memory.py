@@ -40,6 +40,23 @@ class MemoryStore:
         safe = "".join(c for c in agent if c.isalnum() or c in ("-", "_")) or "agent"
         return os.path.join(self.base_dir, f"{safe}.csv")
 
+    def path(self, agent: str) -> str:
+        """Public path to an agent's CSV (may not exist yet)."""
+        return self._path(agent)
+
+    def exists(self, agent: str) -> bool:
+        return os.path.exists(self._path(agent))
+
+    def clear(self, agent: str) -> bool:
+        """Delete an agent's CSV memory. Returns True if a file was removed."""
+        p = self._path(agent)
+        with self._lock:
+            if os.path.exists(p):
+                os.remove(p)
+                log.info("memory: cleared %s (%s)", agent, p)
+                return True
+        return False
+
     def record(self, agent: str, task: str, instructions: str, output, run_id: str = "") -> None:
         """Append one run's result for `agent`. `output` may be a string or an Exception."""
         body = output if isinstance(output, str) else f"(failed: {output})"

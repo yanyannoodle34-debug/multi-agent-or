@@ -15,8 +15,10 @@ Config lives in config.yaml (provider + models, per-specialist personas, memory,
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 import yaml
 
@@ -190,14 +192,35 @@ def synthesize(task: str, assignments: list[Assignment], outputs: list, cfg: dic
     )
 
 
-async def run_task(task: str, cfg: dict, memory: MemoryStore | None = None) -> RunResult:
+async def run_task(
+    task: str,
+    cfg: dict,
+    memory: MemoryStore | None = None,
+    on_phase: Callable[[str], Awaitable[None]] | None = None,
+) -> RunResult:
     """Full coordinator run: route → (recall memory) → dispatch specialists → synthesize.
 
     When `memory` is provided, each specialist is primed with its recent history and its
-    result is recorded back to its per-agent CSV.
-    """
-    analysis, assignments = route(task, cfg)
+    result is recorded back to its per-agent CSV. Pass `on_phase` (an async callback) to
+    receive human-readable progress updates — used by the Telegram bot for live status.
 
+    The synchronous coordinator calls (route, synthesize) run in a worker thread so this
+    coroutine never blocks the caller's event loop — the bot stays responsive (and
+    cancellable) while a task runs.
+    """
+
+    async def phase(msg: str) -> None:
+        log.info("phase: %s", msg)
+        if on_phase is not None:
+            try:
+                await on_phase(msg)
+            except Exception:  # noqa: BLE001 - progress reporting must never break a run
+                log.warning("on_phase callback failed", exc_info=True)
+
+    await phase("Routing task to specialists…")
+    analysis, assignments = await asyncio.to_thread(route, task, cfg)
+
+    await phase("Engaged: " + ", ".join(a.label for a in assignments) + ". Running specialists…")
     histories: dict[str, str] = {}
     if memory is not None:
         for a in assignments:
@@ -222,7 +245,8 @@ async def run_task(task: str, cfg: dict, memory: MemoryStore | None = None) -> R
         log.warning("%d/%d specialists failed; synthesizing from partial results.",
                     failed, len(outputs))
 
-    deliverable = synthesize(task, assignments, outputs, cfg)
+    await phase("Synthesizing final deliverable…")
+    deliverable = await asyncio.to_thread(synthesize, task, assignments, outputs, cfg)
     return RunResult(task=task, analysis=analysis, assignments=assignments,
                      outputs=outputs, deliverable=deliverable)
 

@@ -52,6 +52,16 @@ memory:
   recall: 3            # how many past entries to feed back into each agent's next prompt
   export_xlsx: false   # also mirror each agent's history to data/<agent>.xlsx (needs openpyxl)
 
+# Telegram control bot (telegram_bot.py). Drive the orchestrator from Telegram with
+# inline buttons: run/stop tasks, live status, per-agent CSV download/upload, and API-key
+# / provider management — all gated to admins.
+telegram:
+  enabled: true
+  token_env: "TELEGRAM_BOT_TOKEN"   # bot token from @BotFather; never hardcode it
+  # Telegram numeric user IDs allowed to control the bot. Find yours via @userinfobot.
+  # Leave empty to run in OPEN mode (anyone can control it) — not recommended.
+  admin_ids: []
+
 # Concurrency for the parallel specialist fan-out. Raise for speed, lower for rate limits.
 max_concurrency: 4
 
