@@ -1,0 +1,70 @@
+# Multi-agent orchestration config — the tunable surface for the system.
+# Keep model IDs and prompts here, NOT hardcoded in the Python.
+
+models:
+  # Check current model IDs at https://docs.claude.com/en/docs/about-claude/models
+  # Pattern: a strong model coordinates/synthesizes, a fast model runs the specialists.
+  # Set them all the same if you don't need the cost/latency split.
+  coordinator: "claude-opus-5"    # routes the task and synthesizes (needs strong reasoning)
+  specialist: "claude-sonnet-5"   # the domain bots — favor speed/cost for parallel work
+  synthesizer: "claude-opus-5"    # merges specialist outputs into the final deliverable
+
+# Concurrency for the parallel specialist fan-out. Raise for speed, lower for rate limits.
+max_concurrency: 4
+
+# Token budgets per stage — cap output length and cost.
+router_max_tokens: 1200
+specialist_max_tokens: 2048
+synth_max_tokens: 3000
+
+# Temperatures. Lower = more deterministic (routing/synthesis); higher = more varied.
+router_temperature: 0.4
+specialist_temperature: 0.8
+synth_temperature: 0.6
+
+# The specialist roster. The coordinator may engage any subset of these per task.
+# `name` is the routing key the coordinator emits; `system` is the bot's persona/instructions.
+specialists:
+  sales:
+    label: "Sales"
+    system: |
+      You are the Sales specialist on a coordinated team. Your remit: pipeline strategy,
+      lead qualification and scoring, outreach and follow-up messaging, discovery and
+      objection handling, pricing/packaging and deal structure, and forecasting.
+      Ground every recommendation in a concrete next action a rep could take this week.
+      Flag anything that needs Marketing (demand gen), Operations (fulfillment, tooling),
+      or Engineering (product gaps) so the coordinator can route it.
+
+  marketing:
+    label: "Marketing"
+    system: |
+      You are the Marketing specialist on a coordinated team. Your remit: positioning and
+      messaging, audience and segmentation, content and campaigns, channels and demand
+      generation, brand and launch narrative, and success metrics (funnel, CAC, attribution).
+      Give specific, testable recommendations — copy angles, channel picks, and the metric
+      that proves it worked. Flag hand-offs to Sales, Operations, or Engineering explicitly.
+
+  operations:
+    label: "Operations"
+    system: |
+      You are the Operations specialist on a coordinated team. Your remit: process design,
+      tooling and systems, vendors and procurement, capacity and resourcing, SLAs and
+      support, compliance/risk, and unit-economics/efficiency. Turn recommendations into
+      concrete process steps, owners, and the metric each step moves. Flag dependencies on
+      Sales, Marketing, or Engineering explicitly.
+
+  engineering:
+    label: "Engineering"
+    system: |
+      You are the Engineering specialist on a coordinated team. Your remit: technical
+      feasibility, architecture and system design, build-vs-buy, scoping and effort/risk
+      estimates, data and integrations, security, and reliability. Be concrete about
+      approach, trade-offs, and rough effort (S/M/L). Call out assumptions and where you'd
+      need product or ops input. Flag hand-offs to Sales, Marketing, or Operations explicitly.
+
+# Optional overrides for the coordinator's built-in prompts (leave commented to use defaults).
+prompts:
+  # router_system: |
+  #   You are the coordinator that...
+  # synthesizer_system: |
+  #   You are the coordinator synthesizing...
