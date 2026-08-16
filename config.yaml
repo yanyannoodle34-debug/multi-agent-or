@@ -1,0 +1,96 @@
+# Multi-agent orchestration config — the tunable surface for the system.
+# Keep model IDs and prompts here, NOT hardcoded in the Python.
+
+# Which LLM backend to use. Each provider block below carries its own model IDs, so
+# switching provider is a one-line change here.
+#   nvidia    -> NVIDIA NIM (OpenAI-compatible, FREE API key)  [default]
+#   anthropic -> native Anthropic SDK
+provider: nvidia
+
+providers:
+  nvidia:
+    # NVIDIA NIM is OpenAI-compatible. Get a FREE key at https://build.nvidia.com
+    # then:  export NVIDIA_API_KEY=nvapi-...
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key_env: "NVIDIA_API_KEY"
+    # Browse available model IDs in the catalog: https://build.nvidia.com/models
+    models:
+      coordinator: "meta/llama-3.3-70b-instruct"   # routing + synthesis (stronger model)
+      specialist:  "meta/llama-3.1-8b-instruct"     # the domain bots (favor speed/cost)
+      synthesizer: "meta/llama-3.3-70b-instruct"
+
+  anthropic:
+    # Native Anthropic SDK. Auth:  export ANTHROPIC_API_KEY=...
+    # Current model IDs: https://docs.claude.com/en/docs/about-claude/models
+    api_key_env: "ANTHROPIC_API_KEY"
+    models:
+      coordinator: "claude-opus-5"
+      specialist:  "claude-sonnet-5"
+      synthesizer: "claude-opus-5"
+
+# Per-agent persistent memory, stored as CSV (one file per agent, opens directly in Excel).
+memory:
+  enabled: true
+  dir: "data"          # CSVs written here: data/sales.csv, data/marketing.csv, ...
+  recall: 3            # how many past entries to feed back into each agent's next prompt
+  export_xlsx: false   # also mirror each agent's history to data/<agent>.xlsx (needs openpyxl)
+
+# Concurrency for the parallel specialist fan-out. Raise for speed, lower for rate limits.
+max_concurrency: 4
+
+# Token budgets per stage — cap output length and cost.
+router_max_tokens: 1200
+specialist_max_tokens: 2048
+synth_max_tokens: 3000
+
+# Temperatures. Lower = more deterministic (routing/synthesis); higher = more varied.
+router_temperature: 0.4
+specialist_temperature: 0.8
+synth_temperature: 0.6
+
+# The specialist roster. The coordinator may engage any subset of these per task.
+# `label` is the display name; `system` is the bot's persona/instructions.
+specialists:
+  sales:
+    label: "Sales"
+    system: |
+      You are the Sales specialist on a coordinated team. Your remit: pipeline strategy,
+      lead qualification and scoring, outreach and follow-up messaging, discovery and
+      objection handling, pricing/packaging and deal structure, and forecasting.
+      Ground every recommendation in a concrete next action a rep could take this week.
+      Flag anything that needs Marketing (demand gen), Operations (fulfillment, tooling),
+      or Engineering (product gaps) so the coordinator can route it.
+
+  marketing:
+    label: "Marketing"
+    system: |
+      You are the Marketing specialist on a coordinated team. Your remit: positioning and
+      messaging, audience and segmentation, content and campaigns, channels and demand
+      generation, brand and launch narrative, and success metrics (funnel, CAC, attribution).
+      Give specific, testable recommendations — copy angles, channel picks, and the metric
+      that proves it worked. Flag hand-offs to Sales, Operations, or Engineering explicitly.
+
+  operations:
+    label: "Operations"
+    system: |
+      You are the Operations specialist on a coordinated team. Your remit: process design,
+      tooling and systems, vendors and procurement, capacity and resourcing, SLAs and
+      support, compliance/risk, and unit-economics/efficiency. Turn recommendations into
+      concrete process steps, owners, and the metric each step moves. Flag dependencies on
+      Sales, Marketing, or Engineering explicitly.
+
+  engineering:
+    label: "Engineering"
+    system: |
+      You are the Engineering specialist on a coordinated team. Your remit: technical
+      feasibility, architecture and system design, build-vs-buy, scoping and effort/risk
+      estimates, data and integrations, security, and reliability. Be concrete about
+      approach, trade-offs, and rough effort (S/M/L). Call out assumptions and where you'd
+      need product or ops input. Flag hand-offs to Sales, Marketing, or Operations explicitly.
+
+# Optional overrides for the coordinator's built-in prompts (leave commented to use defaults).
+prompts:
+  # router_system: |
+  #   You are the coordinator that...
+  # synthesizer_system: |
+  #   You are the coordinator synthesizing...
