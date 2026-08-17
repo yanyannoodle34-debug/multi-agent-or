@@ -13,8 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Built in Python. No heavy framework — the coordinator control flow is plain Python. The LLM
 backend is pluggable: **OpenRouter** (OpenAI-compatible gateway — the default), **NVIDIA NIM**
-(OpenAI-compatible, free API key), or the **native Anthropic SDK**, selected by one line in
-`config.yaml`.
+(OpenAI-compatible, free API key), **DeepSeek** (OpenAI-compatible), or the **native Anthropic
+SDK**, selected by one line in `config.yaml`.
 
 ## Commands
 
@@ -82,21 +82,29 @@ stays cancellable while it executes.
   (`load_config`, `activate`, `build_memory`). Hand-offs are structured: the router emits
   `<assignment><agent>key</agent><instructions>…</instructions>` blocks parsed into
   `Assignment` dataclasses; a full run returns a `RunResult` (`.to_dict()` feeds the dashboard).
+  Runtime roster edits (`add_specialist`/`remove_specialist`, used by the bot) persist as a
+  JSON overlay (`data/roster.json`) that `apply_roster` merges over the config roster in
+  `activate()` — so added/removed agents survive restarts without rewriting `config.yaml`.
 - **`dashboard.py`** is a local Flask UI. All async orchestration runs on a single
   long-lived event loop in a background thread (so the async SDK clients stay bound to one
   loop across requests); handlers submit coroutines via `asyncio.run_coroutine_threadsafe`.
 - **`telegram_bot.py`** is a `python-telegram-bot` control bot (admin-gated via
-  `telegram.admin_ids`). Inline-button menus route on short `callback_data` prefixes
-  (`menu:`, `run:`, `agent:`, `key:`, `admin:`); free-text/file replies are captured via a
-  per-user `context.user_data["await"]` pending-action flag. Running tasks are tracked as
-  `asyncio.Task` in `chat_data["run_task"]` so **Stop** can cancel them. A global
-  `add_error_handler` plus per-handler try/except keep it alive; module-level `CFG`/`MEMORY`
-  are mutated in place when switching provider / toggling memory / setting keys.
+  `telegram.admin_ids`, overridable by the `TELEGRAM_ADMIN_IDS` env for the dashboard-launched
+  subprocess). Inline-button menus route on short `callback_data` prefixes (`menu:`, `run:`,
+  `agent:`, `key:`, `admin:`); free-text/file replies are captured via a per-user
+  `context.user_data["await"]` pending-action flag (cleared at the top of every callback, then
+  re-armed by handlers that expect input — including the 3-step add-agent flow). Running tasks
+  are tracked as `asyncio.Task` in `chat_data["run_task"]` so **Stop** can cancel them; agents
+  can be added/removed live via `orchestrator.add_specialist`/`remove_specialist`. A global
+  `add_error_handler` plus per-handler try/except keep it alive; `_ensure_event_loop()` sets a
+  loop before `run_polling()` for Python 3.12+/3.14. Module-level `CFG`/`MEMORY` are mutated in
+  place when switching provider / toggling memory / setting keys / editing the roster.
 
 Conventions worth preserving:
 - **Model IDs live in `config.yaml`, never hardcoded in logic** — under each provider block.
-  OpenRouter catalog: <https://openrouter.ai/models> (namespaced `vendor/model`, `:free` variants);
-  NVIDIA: <https://build.nvidia.com/models>; Anthropic: <https://docs.claude.com/en/docs/about-claude/models>.
+  OpenRouter: <https://openrouter.ai/models> (namespaced `vendor/model`, `:free` variants);
+  NVIDIA: <https://build.nvidia.com/models>; DeepSeek: `deepseek-chat`/`deepseek-reasoner`;
+  Anthropic: <https://docs.claude.com/en/docs/about-claude/models>.
 - **Graceful degradation**: an unknown specialist key is skipped; an empty route falls back
   to the whole roster; partial specialist failures still synthesize (only an all-fail errors).
 - **Provider clients build lazily** — never construct an SDK client at import time; keep

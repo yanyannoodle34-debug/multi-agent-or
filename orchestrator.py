@@ -16,7 +16,9 @@ Config lives in config.yaml (provider + models, per-specialist personas, memory,
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -266,8 +268,9 @@ def load_config(path: str = "config.yaml") -> dict:
 def activate(cfg: dict) -> dict:
     """Select the configured provider and resolve its model IDs into cfg["models"].
 
-    Safe to call offline: the provider client is only built on the first real LLM call,
-    so this resolves models without needing an API key or network.
+    Also applies any runtime roster overlay (agents added/removed via the bot). Safe to
+    call offline: the provider client is only built on the first real LLM call, so this
+    resolves models without needing an API key or network.
     """
     name = cfg.get("provider", "anthropic")
     pcfg = (cfg.get("providers") or {}).get(name)
@@ -278,7 +281,88 @@ def activate(cfg: dict) -> dict:
         raise SystemExit(f"Provider {name!r} has no `models:` block in config.yaml")
     providers.configure(name, pcfg)
     cfg["models"] = models
+    apply_roster(cfg)
     return cfg
+
+
+# --- runtime roster management (add/remove specialists, persisted as an overlay) ---------
+# The specialist roster lives in config.yaml, but admins can add/remove agents at runtime.
+# Rather than rewrite the (commented) YAML, changes are stored as a small JSON overlay next
+# to the memory CSVs and merged over the config roster on load — so they survive restarts.
+
+def _roster_path(cfg: dict) -> str:
+    base = (cfg.get("memory") or {}).get("dir", "data")
+    return os.path.join(base, "roster.json")
+
+
+def _norm_key(key: str) -> str:
+    return "".join(c for c in (key or "").strip().lower() if c.isalnum() or c in ("-", "_"))
+
+
+def load_roster_overlay(cfg: dict) -> dict:
+    path = _roster_path(cfg)
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            return {"add": dict(data.get("add") or {}), "remove": list(data.get("remove") or [])}
+        except (OSError, ValueError):
+            log.warning("Could not read roster overlay %s; ignoring.", path)
+    return {"add": {}, "remove": []}
+
+
+def save_roster_overlay(cfg: dict, overlay: dict) -> None:
+    path = _roster_path(cfg)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"add": overlay.get("add", {}), "remove": overlay.get("remove", [])}, f, indent=2)
+
+
+def apply_roster(cfg: dict) -> dict:
+    """Merge the runtime overlay (removals then additions) over the config roster."""
+    base = dict(cfg.get("specialists") or {})
+    overlay = load_roster_overlay(cfg)
+    for key in overlay["remove"]:
+        base.pop(key, None)
+    base.update(overlay["add"])
+    cfg["specialists"] = base
+    return cfg
+
+
+def add_specialist(cfg: dict, key: str, label: str, system: str) -> str:
+    """Add or update a specialist and persist it to the overlay. Returns the normalized key."""
+    key = _norm_key(key)
+    if not key:
+        raise ValueError("Agent key must contain letters, digits, '-' or '_'.")
+    system = (system or "").strip()
+    if not system:
+        raise ValueError("The system prompt cannot be empty.")
+    spec = {"label": (label or "").strip() or key.title(), "system": system}
+    cfg.setdefault("specialists", {})[key] = spec
+    overlay = load_roster_overlay(cfg)
+    overlay["add"][key] = spec
+    if key in overlay["remove"]:
+        overlay["remove"].remove(key)
+    save_roster_overlay(cfg, overlay)
+    log.info("Added specialist %r (%s).", key, spec["label"])
+    return key
+
+
+def remove_specialist(cfg: dict, key: str) -> None:
+    """Remove a specialist and persist the removal to the overlay."""
+    key = _norm_key(key)
+    specs = cfg.get("specialists") or {}
+    if key not in specs:
+        raise ValueError(f"No agent named {key!r}.")
+    if len(specs) <= 1:
+        raise ValueError("Can't remove the last remaining agent.")
+    specs.pop(key, None)
+    overlay = load_roster_overlay(cfg)
+    overlay["add"].pop(key, None)
+    if key not in overlay["remove"]:
+        overlay["remove"].append(key)
+    save_roster_overlay(cfg, overlay)
+    log.info("Removed specialist %r.", key)
 
 
 def build_memory(cfg: dict) -> MemoryStore | None:

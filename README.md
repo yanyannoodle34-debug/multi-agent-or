@@ -9,9 +9,10 @@ synthesizes their outputs into a single deliverable. This is a routing + orchest
 hybrid: the roster is fixed and known, but *which* specialists run — and what each is told —
 is decided per task.
 
-Runs on **OpenRouter** (default), **NVIDIA NIM's free API**, or the **Anthropic API** — a
-one-line switch in `config.yaml`. Each agent keeps **persistent memory** in CSV
-(Excel-compatible), and there's a **local web dashboard** to drive the whole thing.
+Runs on **OpenRouter** (default), **NVIDIA NIM's free API**, **DeepSeek**, or the
+**Anthropic API** — a one-line switch in `config.yaml`. Each agent keeps **persistent
+memory** in CSV (Excel-compatible), and there's a **local web dashboard** to drive the
+whole thing.
 
 ```
                     ┌─────────────────────────┐
@@ -86,6 +87,9 @@ provider: openrouter   # or: nvidia, anthropic
   app attribution and rankings.
 - **nvidia** — NVIDIA NIM, also **OpenAI-compatible**. Free API key from
   <https://build.nvidia.com>; model IDs at <https://build.nvidia.com/models>.
+- **deepseek** — DeepSeek's API, also **OpenAI-compatible**. Key at
+  <https://platform.deepseek.com/api_keys>; models `deepseek-chat` (V3) and
+  `deepseek-reasoner` (R1).
 - **anthropic** — the native Anthropic SDK; model IDs at
   <https://docs.claude.com/en/docs/about-claude/models>.
 
@@ -126,8 +130,11 @@ Send `/start`, then use the menu:
   runs specialists, and synthesizes. Stop cancels a run mid-flight.
 - **📊 Status** — a live dashboard: active provider, model IDs, masked API key, memory
   state, whether a task is running, and the last run summary.
-- **🧠 Agents** — per agent: **📥 download** its memory CSV, **⬆️ upload** a replacement
-  CSV (header-validated), or **🗑 clear** it.
+- **🧠 Agents** — **➕ add** a new specialist (guided key → label → system-prompt flow) or,
+  per agent, view its persona, **📥 download** / **⬆️ upload** (header-validated) / **🗑 clear**
+  its memory CSV, or **❌ delete** it (with confirmation). Added/removed agents persist across
+  restarts (stored as a small `data/roster.json` overlay) and the coordinator routes to the
+  updated roster immediately.
 - **🔑 API keys** — set any provider's key (session-scoped; your message with the secret is
   deleted best-effort) and switch the active provider.
 - **⚙️ Admin** — toggle memory; see admin IDs.

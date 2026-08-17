@@ -36,6 +36,18 @@ providers:
       specialist:  "meta/llama-3.1-8b-instruct"     # the domain bots (favor speed/cost)
       synthesizer: "meta/llama-3.3-70b-instruct"
 
+  deepseek:
+    # DeepSeek is OpenAI-compatible. Get a key at https://platform.deepseek.com/api_keys
+    # then:  export DEEPSEEK_API_KEY=sk-...
+    base_url: "https://api.deepseek.com"
+    api_key_env: "DEEPSEEK_API_KEY"
+    # Models: deepseek-chat (V3, fast) and deepseek-reasoner (R1, deeper reasoning).
+    # See https://api-docs.deepseek.com/quick_start/pricing
+    models:
+      coordinator: "deepseek-chat"      # or "deepseek-reasoner" for harder routing
+      specialist:  "deepseek-chat"
+      synthesizer: "deepseek-chat"
+
   anthropic:
     # Native Anthropic SDK. Auth:  export ANTHROPIC_API_KEY=...
     # Current model IDs: https://docs.claude.com/en/docs/about-claude/models

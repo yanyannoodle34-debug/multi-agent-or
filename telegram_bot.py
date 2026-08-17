@@ -146,8 +146,9 @@ def kb_back(target: str = "menu:main") -> InlineKeyboardMarkup:
 
 
 def kb_agents() -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(spec.get("label", key), callback_data=f"agent:{key}")]
+    rows = [[InlineKeyboardButton(f"{spec.get('label', key)}  ›", callback_data=f"agent:{key}")]
             for key, spec in CFG["specialists"].items()]
+    rows.append([InlineKeyboardButton("➕ Add agent", callback_data="agent:new")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -156,9 +157,21 @@ def kb_agent(agent: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📥 Download CSV", callback_data=f"agent:dl:{agent}"),
          InlineKeyboardButton("⬆️ Update CSV", callback_data=f"agent:up:{agent}")],
-        [InlineKeyboardButton("🗑 Clear memory", callback_data=f"agent:clr:{agent}")],
+        [InlineKeyboardButton("🗑 Clear memory", callback_data=f"agent:clr:{agent}"),
+         InlineKeyboardButton("❌ Delete agent", callback_data=f"agent:del:{agent}")],
         [InlineKeyboardButton("⬅️ Back", callback_data="menu:agents")],
     ])
+
+
+def kb_confirm_delete(agent: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Yes, delete", callback_data=f"agent:delyes:{agent}"),
+         InlineKeyboardButton("↩️ Cancel", callback_data=f"agent:{agent}")],
+    ])
+
+
+def kb_cancel(target: str = "menu:agents") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Cancel", callback_data=target)]])
 
 
 def kb_keys() -> InlineKeyboardMarkup:
@@ -185,9 +198,10 @@ def kb_admin() -> InlineKeyboardMarkup:
 # --------------------------------------------------------------------------- screens
 
 def text_main() -> str:
-    return ("<b>Multi-Agent Orchestrator</b>\n"
+    return ("<b>🤖 Multi-Agent Orchestrator</b>\n"
             f"Provider: <code>{html.escape(str(CFG.get('provider')))}</code>   "
-            f"Memory: <code>{'on' if MEMORY else 'off'}</code>\n\n"
+            f"Memory: <code>{'on' if MEMORY else 'off'}</code>   "
+            f"Agents: <code>{len(CFG['specialists'])}</code>\n\n"
             "Pick an action:")
 
 
@@ -211,6 +225,13 @@ def text_status(context: ContextTypes.DEFAULT_TYPE) -> str:
     if not ADMIN_IDS:
         lines.append("\n⚠️ <i>No admin_ids set — bot is in OPEN mode.</i>")
     return "\n".join(lines)
+
+
+def text_agents() -> str:
+    n = len(CFG["specialists"])
+    return (f"🧠 <b>Agents</b> ({n})\n"
+            "Tap one to view its persona, manage its memory CSV, or delete it — "
+            "or add a new specialist.")
 
 
 def text_keys() -> str:
@@ -319,14 +340,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if "not modified" not in str(e).lower():
                 raise
 
+    # Any button press cancels a half-finished text/file input; handlers that expect
+    # input (run, csv upload, key set, add-agent) re-arm it below.
+    context.user_data.pop("await", None)
+
     # --- top-level menus ---
     if data == "menu:main":
-        context.user_data.pop("await", None)
         return await edit(text_main(), kb_main())
     if data == "menu:status":
         return await edit(text_status(context), kb_back())
     if data == "menu:agents":
-        return await edit("🧠 <b>Agent memory</b>\nPick an agent:", kb_agents())
+        return await edit(text_agents(), kb_agents())
     if data == "menu:keys":
         return await edit(text_keys(), kb_keys())
     if data == "menu:admin":
@@ -347,6 +371,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     # --- agents ---
+    if data == "agent:new":
+        context.user_data["await"] = {"kind": "newagent", "step": "key", "draft": {}}
+        return await edit(
+            "➕ <b>Add a new agent</b>\n\nStep 1/3 — send a short <b>key</b> (lowercase id, "
+            "e.g. <code>finance</code> or <code>legal</code>).",
+            kb_cancel("menu:agents"))
     if data.startswith("agent:dl:"):
         return await _send_agent_csv(q, data.split(":", 2)[2])
     if data.startswith("agent:up:"):
@@ -354,14 +384,32 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["await"] = {"kind": "csv", "agent": agent}
         return await edit(f"⬆️ Send me a <b>.csv</b> file to replace <code>{html.escape(agent)}</code>"
                           f"'s memory.\nHeader must be: <code>{html.escape(','.join(FIELDS))}</code>",
-                          kb_back("menu:agents"))
+                          kb_cancel("menu:agents"))
     if data.startswith("agent:clr:"):
         agent = data.split(":", 2)[2]
         removed = MEMORY.clear(agent) if MEMORY else False
         await q.answer("Cleared" if removed else "Nothing to clear")
         return await edit(_text_agent(agent), kb_agent(agent))
+    if data.startswith("agent:delyes:"):
+        agent = data.split(":", 2)[2]
+        try:
+            orchestrator.remove_specialist(CFG, agent)
+            if MEMORY:
+                MEMORY.clear(agent)
+            await q.answer(f"Deleted {agent}")
+        except ValueError as exc:
+            await q.answer(str(exc), show_alert=True)
+        return await edit(text_agents(), kb_agents())
+    if data.startswith("agent:del:"):
+        agent = data.split(":", 2)[2]
+        label = CFG["specialists"].get(agent, {}).get("label", agent)
+        return await edit(f"❌ Delete <b>{html.escape(label)}</b> and its memory?\n"
+                          "This can't be undone.", kb_confirm_delete(agent))
     if data.startswith("agent:"):
         agent = data.split(":", 1)[1]
+        if agent not in CFG["specialists"]:
+            await q.answer("That agent no longer exists", show_alert=True)
+            return await edit(text_agents(), kb_agents())
         return await edit(_text_agent(agent), kb_agent(agent))
 
     # --- keys / provider ---
@@ -391,13 +439,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def _text_agent(agent: str) -> str:
-    label = CFG["specialists"].get(agent, {}).get("label", agent)
+    spec = CFG["specialists"].get(agent, {})
+    label = spec.get("label", agent)
+    persona = " ".join((spec.get("system") or "").split())
+    persona = persona[:180] + ("…" if len(persona) > 180 else "")
     rows = MEMORY.recall(agent, limit=3) if MEMORY else []
     exists = MEMORY.exists(agent) if MEMORY else False
-    body = [f"🧠 <b>{html.escape(label)}</b> memory",
-            f"CSV: <code>{'present' if exists else 'empty'}</code>"]
+    body = [f"🧠 <b>{html.escape(label)}</b>  <code>{html.escape(agent)}</code>",
+            f"<i>{html.escape(persona)}</i>",
+            f"\nMemory CSV: <code>{'present' if exists else 'empty'}</code>"]
     if rows:
-        body.append("\nRecent:")
+        body.append("Recent:")
         for r in rows:
             body.append(f"• <i>{html.escape(r.get('timestamp', ''))}</i>: "
                         f"{html.escape((r.get('task') or '')[:60])}")
@@ -435,9 +487,60 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif kind == "apikey":
         context.user_data.pop("await", None)
         await _set_api_key(pending["provider"], update, context)
+    elif kind == "newagent":
+        await _add_agent_step(update, context, pending)
     else:
         await update.message.reply_text("Send a CSV file, or go Back.",
                                         reply_markup=kb_back("menu:agents"))
+
+
+async def _add_agent_step(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    """Drive the 3-step add-agent conversation: key → label → system prompt."""
+    text = (update.message.text or "").strip()
+    if text.lower() in ("/cancel", "cancel"):
+        context.user_data.pop("await", None)
+        await update.message.reply_text("Cancelled.", parse_mode=ParseMode.HTML,
+                                        reply_markup=kb_agents())
+        return
+    draft = pending["draft"]
+    step = pending["step"]
+
+    if step == "key":
+        key = orchestrator._norm_key(text)
+        if not key:
+            await update.message.reply_text("❌ Invalid key. Use letters/digits/-/_ , e.g. "
+                                            "<code>finance</code>. Try again or /cancel.",
+                                            parse_mode=ParseMode.HTML, reply_markup=kb_cancel())
+            return
+        if key in CFG["specialists"]:
+            await update.message.reply_text(f"⚠️ <code>{html.escape(key)}</code> already exists — "
+                                            "sending will overwrite it. Send another key or continue.",
+                                            parse_mode=ParseMode.HTML, reply_markup=kb_cancel())
+        draft["key"] = key
+        pending["step"] = "label"
+        await update.message.reply_text(
+            f"Key: <code>{html.escape(key)}</code>\n\nStep 2/3 — send a <b>label</b> "
+            "(display name, e.g. <code>Finance</code>).",
+            parse_mode=ParseMode.HTML, reply_markup=kb_cancel())
+    elif step == "label":
+        draft["label"] = text
+        pending["step"] = "system"
+        await update.message.reply_text(
+            f"Label: <b>{html.escape(text)}</b>\n\nStep 3/3 — send the <b>system prompt</b> "
+            "(the agent's persona and remit).",
+            parse_mode=ParseMode.HTML, reply_markup=kb_cancel())
+    elif step == "system":
+        context.user_data.pop("await", None)
+        try:
+            key = orchestrator.add_specialist(CFG, draft["key"], draft.get("label", ""), text)
+        except ValueError as exc:
+            await update.message.reply_text(f"❌ {html.escape(str(exc))}",
+                                            parse_mode=ParseMode.HTML, reply_markup=kb_agents())
+            return
+        await update.message.reply_text(
+            f"✅ Added agent <b>{html.escape(draft.get('label') or key)}</b> "
+            f"(<code>{html.escape(key)}</code>). It's now in the roster and the coordinator "
+            "will route to it.", parse_mode=ParseMode.HTML, reply_markup=kb_agents())
 
 
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
