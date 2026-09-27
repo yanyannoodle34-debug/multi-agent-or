@@ -34,9 +34,16 @@ python telegram_bot.py                     # Telegram control bot (needs TELEGRA
 python -m py_compile providers.py memory.py llm_utils.py orchestrator.py run.py dashboard.py telegram_bot.py
 ```
 
-There is no formal test suite. The orchestration logic and the dashboard endpoints are
-verified offline by stubbing `orchestrator.call_llm` / `call_llm_async` (see below) so
-routing, fallback, memory, and synthesis run without live API calls.
+```bash
+pytest -q                                 # offline test suite (tests/) — no key/network
+```
+
+The `tests/` suite runs fully offline by stubbing `orchestrator.call_llm` /
+`call_llm_async` (see below) so routing, fallback, memory, and synthesis are exercised
+without live API calls. It covers routing + graceful degradation (`test_routing.py`,
+`test_degradation.py`), the CSV memory store (`test_memory.py`), the runtime roster overlay
+(`test_roster.py`), and the XML extraction helpers (`test_extract.py`). Shared fixtures live
+in `tests/conftest.py`.
 
 ## Architecture
 
