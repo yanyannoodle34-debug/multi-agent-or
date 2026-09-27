@@ -563,10 +563,12 @@ async def _set_api_key(provider: str, update: Update, context: ContextTypes.DEFA
         await update.message.reply_text("❌ Unknown provider.", reply_markup=kb_back("menu:keys"))
         return
     os.environ[env] = key
-    providers.configure(provider, _providers().get(provider))  # rebuild client lazily w/ new key
-    # If it's the active provider, reset so the next call uses the new key.
+    # Only rebuild the backend when the key belongs to the ACTIVE provider — otherwise
+    # providers.configure() would switch the active provider out from under a running
+    # session. For a non-active provider the key just sits in the env and its client is
+    # built lazily the next time an admin switches to it.
     if provider == CFG.get("provider"):
-        providers.configure(provider, _providers().get(provider))
+        providers.configure(provider, _providers().get(provider))  # rebuild client w/ new key
     try:
         await update.message.delete()  # best-effort: strip the secret from chat
     except Exception:  # noqa: BLE001

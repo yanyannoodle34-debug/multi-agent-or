@@ -13,3 +13,7 @@ python-telegram-bot>=21.0
 
 # Optional: xlsx export of agent memory (set memory.export_xlsx: true in config.yaml)
 # openpyxl>=3.1
+
+# Dev only: offline test suite (see tests/). Run with:  pytest -q
+# These stub the LLM calls, so no provider key or network is needed.
+pytest>=8.0
