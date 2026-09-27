@@ -66,8 +66,11 @@ class _AnthropicBackend(_Backend):
             RateLimitError,
         )
 
-        self._sync = Anthropic()
-        self._async = AsyncAnthropic()
+        # max_retries=0: this module owns retry-with-backoff (see `complete`/`acomplete`),
+        # so disable the SDK's own retry layer to avoid compounding (up to 4 x the SDK's
+        # default per call).
+        self._sync = Anthropic(max_retries=0)
+        self._async = AsyncAnthropic(max_retries=0)
         self._always = (RateLimitError, APIConnectionError)
         self._status = APIStatusError
 
@@ -125,8 +128,10 @@ class _OpenAICompatBackend(_Backend):
         # Optional per-provider headers — e.g. OpenRouter's HTTP-Referer / X-Title
         # used for app attribution and its model-usage rankings.
         headers = cfg.get("headers") or None
-        self._sync = OpenAI(base_url=base_url, api_key=api_key, default_headers=headers)
-        self._async = AsyncOpenAI(base_url=base_url, api_key=api_key, default_headers=headers)
+        # max_retries=0: this module owns retry-with-backoff (see `complete`/`acomplete`),
+        # so disable the SDK's own retry layer to avoid compounding retries.
+        self._sync = OpenAI(base_url=base_url, api_key=api_key, default_headers=headers, max_retries=0)
+        self._async = AsyncOpenAI(base_url=base_url, api_key=api_key, default_headers=headers, max_retries=0)
         self._always = (RateLimitError, APIConnectionError)
         self._status = APIStatusError
 

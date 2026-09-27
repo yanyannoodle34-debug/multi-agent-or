@@ -260,7 +260,36 @@ async def orchestrate(task: str, cfg: dict) -> str:
 
 # --- config + wiring helpers (shared by run.py and dashboard.py) -------------------------
 
+def load_dotenv(path: str = ".env") -> None:
+    """Load KEY=VALUE lines from a local .env into os.environ (existing vars win).
+
+    Zero-dependency and best-effort: a missing or unreadable file is a no-op. Lets users
+    keep provider keys (OPENROUTER_API_KEY, TELEGRAM_BOT_TOKEN, …) in a .env instead of
+    exporting them each shell. An `export ` prefix is tolerated; surrounding quotes are
+    stripped. Existing environment variables are never overridden.
+    """
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def load_config(path: str = "config.yaml") -> dict:
+    load_dotenv()  # pick up a local .env before anything reads provider keys
     with open(path) as f:
         return yaml.safe_load(f)
 

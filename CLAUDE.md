@@ -21,7 +21,8 @@ SDK**, selected by one line in `config.yaml`.
 ```bash
 pip install -r requirements.txt          # pyyaml, openai, anthropic, flask
 
-# Provider auth (pick per config.yaml `provider:`):
+# Provider auth (pick per config.yaml `provider:`). Export, or put in a .env (see
+# .env.example) — orchestrator.load_dotenv() loads it at startup; exports still win.
 export OPENROUTER_API_KEY=sk-or-...      # default provider; key: https://openrouter.ai/keys
 export NVIDIA_API_KEY=nvapi-...          # if provider: nvidia (free: https://build.nvidia.com)
 export ANTHROPIC_API_KEY=...             # if provider: anthropic

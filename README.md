@@ -42,6 +42,10 @@ export OPENROUTER_API_KEY=sk-or-...
 # export ANTHROPIC_API_KEY=...         # provider: anthropic
 ```
 
+Prefer a file? Copy `.env.example` to `.env` and put your keys there — it's loaded
+automatically at startup (exported shell variables still take precedence, and `.env` is
+gitignored).
+
 ## Run
 
 **CLI:**
